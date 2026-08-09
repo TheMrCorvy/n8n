@@ -1,0 +1,6 @@
+# This file ensures the data/ directory is tracked by git as an empty placeholder.
+# n8n will populate this directory with the SQLite database and other runtime files
+# when the container starts for the first time.
+#
+# The contents of data/ are excluded from git via .gitignore.
+# Do NOT delete this file.

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: workflow-engine
+spec:
+  selector:
+    app.kubernetes.io/name: n8n
+  type: ClusterIP     # Change to LoadBalancer or NodePort to expose externally
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 5678

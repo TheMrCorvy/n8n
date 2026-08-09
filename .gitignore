@@ -1,0 +1,20 @@
+# ── Git-ignore rules for n8n self-hosted ──────────────────────────────────
+
+# ── Persistent data (SQLite DB, credentials, workflows, binary files) ──────
+# Ignore everything inside data/ except the .gitkeep placeholder.
+data/*
+!data/.gitkeep
+
+# ── Environment variables ─────────────────────────────────────────────────
+.env
+
+# ── OS / Editor artefacts ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+*.log

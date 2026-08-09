@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: workflow-engine
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Start with 5 Gi; increase as your workflow count and binary data grow.
+      storage: 5Gi
+  # Uncomment and set to a specific StorageClass if needed:
+  # storageClassName: standard

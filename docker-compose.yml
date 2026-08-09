@@ -1,0 +1,96 @@
+version: "3.8"
+
+# ---------------------------------------------------------------------------
+# n8n – self-hosted workflow automation
+# ---------------------------------------------------------------------------
+# Persistent data is written to ./data (git-ignored).
+# SQLite is used as the database backend (no external DB required).
+#
+# restart: unless-stopped ensures the container comes back up automatically
+# after a host reboot (OrbStack starts with macOS on login).
+#
+# Logs are written to a bind-mount whose host path is set via HOST_LOG_PATH
+# in .env. Point that variable at the folder watched by your Loki/Promtail
+# instance so .log files are picked up automatically.
+# ---------------------------------------------------------------------------
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+
+    environment:
+      # ── Core ──────────────────────────────────────────────────────────────
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+
+      # ── Database (SQLite) ─────────────────────────────────────────────────
+      - DB_TYPE=sqlite
+      - DB_SQLITE_DATABASE=/home/node/.n8n/database.sqlite
+
+      # ── User management ───────────────────────────────────────────────────
+      # n8n built-in auth is enabled by default (owner account created on
+      # first launch via the web UI).
+      - N8N_USER_MANAGEMENT_DISABLED=false
+
+      # ── Encryption key (REQUIRED – generate with: openssl rand -hex 32) ──
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # ── Timezone ──────────────────────────────────────────────────────────
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/New_York}
+      - TZ=${GENERIC_TIMEZONE:-America/New_York}
+
+      # ── Telemetry (opt-out) ────────────────────────────────────────────────
+      - N8N_DIAGNOSTICS_ENABLED=${N8N_DIAGNOSTICS_ENABLED:-false}
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=${N8N_VERSION_NOTIFICATIONS_ENABLED:-true}
+
+      # ── Logging ───────────────────────────────────────────────────────────
+      # Write logs to files so Loki/Promtail can scrape them from HOST_LOG_PATH.
+      - N8N_LOG_OUTPUT=${N8N_LOG_OUTPUT:-file}
+      - N8N_LOG_LEVEL=${N8N_LOG_LEVEL:-info}
+      # Container-side log directory – always fixed; only the host-side mount
+      # changes (see HOST_LOG_PATH in .env).
+      - N8N_LOG_FILE_LOCATION=/home/node/.n8n/logs/n8n.log
+      # Keep up to 30 rotated log files (one per day by default).
+      - N8N_LOG_FILE_COUNT=${N8N_LOG_FILE_COUNT:-30}
+
+      # ── Executions ────────────────────────────────────────────────────────
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=${EXECUTIONS_DATA_SAVE_ON_ERROR:-all}
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=${EXECUTIONS_DATA_SAVE_ON_SUCCESS:-all}
+      - EXECUTIONS_DATA_SAVE_ON_PROGRESS=${EXECUTIONS_DATA_SAVE_ON_PROGRESS:-false}
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=${EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS:-true}
+      - EXECUTIONS_DATA_PRUNE=${EXECUTIONS_DATA_PRUNE:-true}
+      - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-336}
+
+    volumes:
+      # All n8n data (SQLite DB, credentials, workflows, binary files) is
+      # stored here. This folder is git-ignored so it never enters version
+      # control, but is easy to back up with a simple script.
+      - ./data:/home/node/.n8n
+
+      # Log files are written inside the container at /home/node/.n8n/logs/
+      # and exposed on the host at HOST_LOG_PATH (set in .env).
+      # Loki/Promtail should watch HOST_LOG_PATH for *.log files.
+      - ${HOST_LOG_PATH}:/home/node/.n8n/logs
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    # ── Kubernetes-readiness hint ─────────────────────────────────────────
+    # Labels follow the common Kubernetes label convention so that if you
+    # import this Compose spec via Kompose (or write a Deployment by hand)
+    # the selectors are already in place.
+    labels:
+      app.kubernetes.io/name: "n8n"
+      app.kubernetes.io/component: "workflow-engine"
+      app.kubernetes.io/managed-by: "docker-compose"
