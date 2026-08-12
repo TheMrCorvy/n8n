@@ -45,6 +45,8 @@ spec:
               value: "5678"
             - name: N8N_PROTOCOL
               value: "http"   # Change to "https" when using TLS termination
+            - name: N8N_PAYLOAD_SIZE_MAX
+              value: "128"
 
             # ── Database ──────────────────────────────────────────────────
             - name: DB_TYPE
