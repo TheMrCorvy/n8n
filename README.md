@@ -24,13 +24,14 @@
    - [Step 8 – Start the container](#step-8--start-the-container)
    - [Step 9 – Verify the container is healthy](#step-9--verify-the-container-is-healthy)
    - [Step 10 – First login & owner account setup](#step-10--first-login--owner-account-setup)
-4. [Day-to-Day Operations](#4-day-to-day-operations)
-5. [Stopping & Removing](#5-stopping--removing)
-6. [Data & Backups](#6-data--backups)
-7. [Environment Variables Reference](#7-environment-variables-reference)
-8. [Kubernetes (Getting Started)](#8-kubernetes-getting-started)
-9. [Upgrading n8n](#9-upgrading-n8n)
-10. [Troubleshooting](#10-troubleshooting)
+4. [Music Downloads (yt-dlp & spotdl)](#4-music-downloads-yt-dlp--spotdl)
+5. [Day-to-Day Operations](#5-day-to-day-operations)
+6. [Stopping & Removing](#6-stopping--removing)
+7. [Data & Backups](#7-data--backups)
+8. [Environment Variables Reference](#8-environment-variables-reference)
+9. [Kubernetes (Getting Started)](#9-kubernetes-getting-started)
+10. [Upgrading n8n](#10-upgrading-n8n)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -43,6 +44,8 @@ n8n/
 ├── .env                    ← Your local secrets (git-ignored, never committed)
 ├── .gitignore
 ├── README.md
+├── scripts/                ← Helper scripts
+│   └── entrypoint.sh       ← Custom entrypoint: installs yt-dlp, ffmpeg, spotdl on first boot
 ├── data/                   ← ALL persistent n8n data lives here (git-ignored)
 │   ├── .gitkeep            ← Placeholder so git tracks the empty folder
 │   ├── database.sqlite     ← SQLite database (auto-created on first run)
@@ -495,7 +498,136 @@ n8n will display the **Setup** screen (this only appears once). Follow these ste
 
 ---
 
-## 4. Day-to-Day Operations
+## 4. Music Downloads (yt-dlp & spotdl)
+
+> [!NOTE]
+> This feature installs **yt-dlp**, **ffmpeg**, and **spotdl** inside the n8n container at first boot via a custom entrypoint script (`scripts/entrypoint.sh`). No Dockerfile is required.
+
+### How it works
+
+| Tool | Purpose |
+|---|---|
+| `ffmpeg` | Audio encoding and post-processing (remux, normalize, embed artwork) |
+| `yt-dlp` | Download audio from YouTube URLs in the best available quality |
+| `spotdl` | Resolve a Spotify track/album/playlist URL, find the best YouTube match, download and embed full ID3 metadata (title, artist, album, cover art) |
+
+On first `docker compose up`, the entrypoint script runs `apk add ffmpeg`, downloads the latest `yt-dlp` binary, and runs `pip3 install spotdl`. A marker file (`/home/node/.n8n/.tools_installed`) is written so subsequent restarts skip the install and start instantly.
+
+Downloaded files land in the container at `/music`, which is bind-mounted from `MUSIC_DOWNLOAD_PATH` on the host — the same folder Navidrome (shockwave) points its `MUSIC_PATH` at. Navidrome's scanner (configured with `SCANNER_SCHEDULE=1m` by default) will detect and index new tracks automatically.
+
+### Setup
+
+1. Set `MUSIC_DOWNLOAD_PATH` in `.env` to the absolute host path of your music library:
+
+   ```dotenv
+   MUSIC_DOWNLOAD_PATH=/mnt/storage/music
+   ```
+
+2. Ensure the n8n container can write to that directory:
+
+   ```bash
+   # Linux only – the container runs as root, so this should already work.
+   # If Navidrome also needs write access, keep PUID/PGID consistent.
+   ls -la /mnt/storage/music
+   ```
+
+3. (Re)start n8n:
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. Watch the install on first boot:
+
+   ```bash
+   docker compose logs -f n8n
+   # You should see: [entrypoint] Installing yt-dlp, ffmpeg and spotdl...
+   # followed by:    [entrypoint] Tools installed successfully.
+   ```
+
+### Building the n8n workflow
+
+Create a new **Webhook** workflow in n8n with the following structure:
+
+```
+Webhook (POST /download)
+  └── Switch (route by "source" field)
+        ├── youtube → Execute Command (yt-dlp)
+        └── spotify → Execute Command (spotdl)
+```
+
+#### Webhook trigger
+
+- Method: `POST`
+- Path: `download`
+- Response mode: `When last node finishes`
+
+Expected JSON body:
+
+```json
+{ "url": "https://...", "source": "youtube" }
+{ "url": "https://open.spotify.com/track/...", "source": "spotify" }
+```
+
+#### Switch node
+
+- Mode: `Rules`
+- Rule 1 → value `{{ $json.body.source }}` equals `youtube`
+- Rule 2 → value `{{ $json.body.source }}` equals `spotify`
+
+#### Execute Command – YouTube branch
+
+```bash
+yt-dlp \
+  --extract-audio \
+  --audio-format mp3 \
+  --audio-quality 0 \
+  --embed-thumbnail \
+  --add-metadata \
+  -o "/music/%(artist)s/%(album)s/%(title)s.%(ext)s" \
+  "{{ $json.body.url }}"
+```
+
+#### Execute Command – Spotify branch
+
+```bash
+spotdl \
+  --output "/music/{artists}/{album}/{title}.{output-ext}" \
+  --format mp3 \
+  "{{ $json.body.url }}"
+```
+
+> [!TIP]
+> Both commands use sub-folder templates (`artist/album/title`) so the music library stays organized and Navidrome can parse metadata from the directory structure as a fallback.
+
+> [!IMPORTANT]
+> spotdl resolves Spotify URLs to YouTube and downloads from there — no Spotify Premium account or API key is required.
+
+### Testing from the command line
+
+```bash
+# YouTube single track
+curl -X POST http://localhost:5678/webhook/download \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","source":"youtube"}'
+
+# Spotify single track
+curl -X POST http://localhost:5678/webhook/download \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC","source":"spotify"}'
+```
+
+### Verify tools inside the container
+
+```bash
+docker compose exec n8n yt-dlp --version
+docker compose exec n8n spotdl --version
+docker compose exec n8n ffmpeg -version | head -1
+```
+
+---
+
+## 5. Day-to-Day Operations
 
 ```bash
 # Start (if not already running)
@@ -522,7 +654,7 @@ docker compose exec n8n sh
 
 ---
 
-## 5. Stopping & Removing
+## 6. Stopping & Removing
 
 ```bash
 # Stop containers only (data is preserved in ./data/)
@@ -539,7 +671,7 @@ Remove-Item data\* -Recurse # Windows PowerShell
 
 ---
 
-## 6. Data & Backups
+## 7. Data & Backups
 
 All n8n data is stored in the `./data/` directory on the host:
 
@@ -595,7 +727,7 @@ docker compose up -d
 
 ---
 
-## 7. Environment Variables Reference
+## 8. Environment Variables Reference
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
@@ -613,12 +745,13 @@ docker compose up -d
 | `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS` | `true` | No | Save executions triggered manually from the editor |
 | `EXECUTIONS_DATA_PRUNE` | `true` | No | Automatically delete old execution data |
 | `EXECUTIONS_DATA_MAX_AGE` | `336` | No | Max age (hours) of execution data before pruning – `336` = 14 days |
+| `MUSIC_DOWNLOAD_PATH` | – | **Yes** | Absolute host path bind-mounted at `/music` inside the container; yt-dlp and spotdl write downloaded tracks here |
 
 See `.env.example` for additional commentary and `docker-compose.yml` for how each variable maps to n8n's internal configuration.
 
 ---
 
-## 8. Kubernetes (Getting Started)
+## 9. Kubernetes (Getting Started)
 
 > [!NOTE]
 > The `k8s/` directory contains a **starter pack** of Kubernetes manifests. They mirror the Docker Compose configuration exactly and are designed to be extended as your infrastructure matures.
@@ -685,7 +818,7 @@ When you're ready to harden the deployment, consider adding:
 
 ---
 
-## 9. Upgrading n8n
+## 10. Upgrading n8n
 
 Since the image tag is `latest`, pulling the newest release is straightforward.
 
@@ -708,7 +841,7 @@ docker compose logs n8n | grep "n8n@"
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### Container exits immediately after starting
 
@@ -721,6 +854,7 @@ docker compose logs n8n
 | `N8N_ENCRYPTION_KEY is not set` | Missing env variable | Set `N8N_ENCRYPTION_KEY` in `.env` |
 | `EACCES: permission denied ... /home/node/.n8n` | Wrong ownership on `./data/` | Run `sudo chown -R 1000:1000 data/` (Linux only) |
 | `Error: SQLITE_CANTOPEN` | SQLite cannot open or create the database | Fix permissions on `./data/` or delete `data/database.sqlite` to reset |
+| `MUSIC_DOWNLOAD_PATH must be set in .env` | Missing required env variable | Add `MUSIC_DOWNLOAD_PATH=/your/music/path` to `.env` |
 
 ---
 
@@ -835,3 +969,31 @@ SELECT * FROM workflow_entity LIMIT 5;
 SELECT * FROM credentials_entity LIMIT 5;
 .quit
 ```
+
+---
+
+### yt-dlp / spotdl not found after first boot
+
+If the tools were not installed (e.g. the container had no internet access on first boot), delete the marker file and restart:
+
+```bash
+# Remove the marker so the install runs again on next start
+docker compose exec n8n rm /home/node/.n8n/.tools_installed
+
+docker compose restart n8n
+docker compose logs -f n8n   # watch the install
+```
+
+---
+
+### Downloaded files don't appear in Navidrome
+
+1. Confirm the file landed in `MUSIC_DOWNLOAD_PATH` on the host:
+
+   ```bash
+   ls -lh /your/music/path/
+   ```
+
+2. Trigger a manual rescan in Navidrome's web UI (**Settings → Library → Scan Now**), or wait for the automatic scan (default: every 1 minute).
+
+3. Confirm the file has a valid audio extension (`.mp3`, `.flac`, `.ogg`, etc.) — Navidrome ignores unknown extensions.
