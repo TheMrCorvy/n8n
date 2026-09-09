@@ -1,4 +1,3 @@
-version: "3.8"
 
 # ---------------------------------------------------------------------------
 # n8n – self-hosted workflow automation
@@ -14,8 +13,8 @@ version: "3.8"
 # instance so .log files are picked up automatically.
 #
 # Music downloads:
-#   A custom entrypoint (scripts/entrypoint.sh) installs yt-dlp, ffmpeg, and
-#   spotdl at first boot. Set MUSIC_DOWNLOAD_PATH in .env to the absolute host
+#   yt-dlp, ffmpeg, and spotdl are baked into the custom image at build time
+#   via the Dockerfile. Set MUSIC_DOWNLOAD_PATH in .env to the absolute host
 #   path where downloaded tracks should land. This is the same folder that
 #   Navidrome (shockwave) points its MUSIC_PATH at, so new tracks are picked
 #   up by the library scanner automatically.
@@ -23,19 +22,12 @@ version: "3.8"
 
 services:
   n8n:
-    image: n8nio/n8n:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: n8n-custom:latest
     container_name: n8n
     restart: unless-stopped
-
-    # ── Run as root so apk / pip can install system tools on first boot ──────
-    # The custom entrypoint installs yt-dlp, ffmpeg, and spotdl, then n8n
-    # itself runs normally. This is the simplest approach that avoids a custom
-    # Dockerfile while keeping the compose file self-contained.
-    user: root
-
-    # ── Custom entrypoint: installs download tools then delegates to n8n ─────
-    entrypoint: ["/bin/sh", "/scripts/entrypoint.sh"]
-    command: ["n8n"]
 
     ports:
       - "${N8N_PORT:-5678}:5678"
@@ -101,9 +93,6 @@ services:
       # and exposed on the host at HOST_LOG_PATH (set in .env).
       # Loki/Promtail should watch HOST_LOG_PATH for *.log files.
       - ${HOST_LOG_PATH}:/home/node/.n8n/logs
-
-      # Custom entrypoint script (read-only bind-mount).
-      - ./scripts/entrypoint.sh:/scripts/entrypoint.sh:ro
 
       # Music library: mounted read-write so yt-dlp / spotdl can write files.
       # Point MUSIC_DOWNLOAD_PATH at the same folder Navidrome watches so new
