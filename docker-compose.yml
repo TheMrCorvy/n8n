@@ -79,8 +79,9 @@ services:
       - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-336}
 
       # ── Execute Command node ───────────────────────────────────────────────────
-      # Unlocks the "Execute Command" node in the n8n UI (hidden by default).
-      - N8N_ALLOW_EXEC=${N8N_ALLOW_EXEC:-false}
+      # In n8n v2+, executeCommand is excluded by default. Setting NODES_EXCLUDE
+      # to an empty array re-enables it (and any other excluded nodes).
+      - NODES_EXCLUDE=${NODES_EXCLUDE:-[]}
 
       # ── Music downloads ────────────────────────────────────────────────────
       # Container-side path where yt-dlp / spotdl drop downloaded tracks.
