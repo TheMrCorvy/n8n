@@ -78,6 +78,10 @@ services:
       - EXECUTIONS_DATA_PRUNE=${EXECUTIONS_DATA_PRUNE:-true}
       - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-336}
 
+      # ── Execute Command node ───────────────────────────────────────────────────
+      # Unlocks the "Execute Command" node in the n8n UI (hidden by default).
+      - N8N_ALLOW_EXEC=${N8N_ALLOW_EXEC:-false}
+
       # ── Music downloads ────────────────────────────────────────────────────
       # Container-side path where yt-dlp / spotdl drop downloaded tracks.
       # Mapped from MUSIC_DOWNLOAD_PATH on the host (see .env).
