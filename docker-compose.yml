@@ -97,6 +97,10 @@ services:
       # Shared secret – must match SANDBOX_API_KEYS on the sandbox-api container.
       - N8N_SANDBOX_SERVICE_API_KEY=${N8N_SANDBOX_SERVICE_API_KEY}
 
+      # ── Web Search (SearXNG) ──────────────────────────────────────────
+      # Internal URL used by the AI Assistant to query your SearXNG instance.
+      - N8N_INSTANCE_AI_SEARXNG_URL=${N8N_INSTANCE_AI_SEARXNG_URL:-http://searxng:8080}
+
     volumes:
       # All n8n data (SQLite DB, credentials, workflows, binary files) is
       # stored here. This folder is git-ignored so it never enters version
@@ -130,10 +134,12 @@ services:
       app.kubernetes.io/managed-by: "docker-compose"
 
     # n8n must be on the sandbox-service network to resolve sandbox-api by
-    # hostname. No host port is exposed for sandbox-api.
+    # hostname, and on the searxng network to reach the search service.
+    # No host port is exposed for sandbox-api or searxng.
     networks:
       - default
       - sandbox-service
+      - searxng
 
   # ---------------------------------------------------------------------------
   # Sandbox stack – required for the AI Assistant to run code
@@ -243,10 +249,42 @@ services:
       app.kubernetes.io/component: "sandbox"
       app.kubernetes.io/managed-by: "docker-compose"
 
+  # ---------------------------------------------------------------------------
+  # SearXNG – free, self-hosted web search for the AI Assistant
+  # ---------------------------------------------------------------------------
+  # n8n's AI Assistant will call http://searxng:8080 to perform searches.
+  # JSON output is enabled via SEARXNG_SEARCH__FORMATS so n8n can parse results.
+  # No API key is required.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    environment:
+      # Must be reachable from the browser (used by SearXNG's own UI).
+      # For a purely internal setup this can be the same as the Docker hostname.
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8081/}
+    # Expose on host port 8081 so you can test it directly in a browser
+    # (http://localhost:8081). n8n reaches it internally on port 8080.
+    ports:
+      - "8081:8080"
+    volumes:
+      # Custom settings: enables JSON output and disables the bot limiter so
+      # n8n's HTTP client can query the /search?format=json endpoint.
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - searxng
+    labels:
+      app.kubernetes.io/name: "searxng"
+      app.kubernetes.io/component: "web-search"
+      app.kubernetes.io/managed-by: "docker-compose"
+
 networks:
   # sandbox-service is an internal bridge. n8n joins it (see networks: below)
   # so it can reach sandbox-api without exposing port 8080 on the host.
   sandbox-service:
+    driver: bridge
+  # searxng is an internal bridge shared between n8n and the searxng container.
+  searxng:
     driver: bridge
 
 # ---------------------------------------------------------------------------

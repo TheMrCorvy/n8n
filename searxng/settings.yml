@@ -1,0 +1,18 @@
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+server:
+  secret_key: "DIYCPfCUGGqzUu603e27dscP4G1XamA"
+  image_proxy: true
+  # Allow the /search?format=json endpoint to be called by non-browser clients
+  # (e.g. n8n's AI Assistant). Without this, newer SearXNG versions return 403.
+  limiter: false
+
+search:
+  # JSON must be listed here for the endpoint to respond with application/json.
+  # n8n parses JSON to extract search results for the AI Assistant.
+  formats:
+    - html
+    - json
