@@ -88,6 +88,15 @@ services:
       # Mapped from MUSIC_DOWNLOAD_PATH on the host (see .env).
       - MUSIC_DOWNLOAD_PATH=/music
 
+      # ── AI Assistant / Sandbox ────────────────────────────────────────────
+      # Enables the built-in AI Assistant module.
+      - N8N_ENABLED_MODULES=${N8N_ENABLED_MODULES:-instance-ai}
+      # Point n8n at the local sandbox-api container.
+      - N8N_INSTANCE_AI_SANDBOX_ENABLED=${N8N_INSTANCE_AI_SANDBOX_ENABLED:-true}
+      - N8N_SANDBOX_SERVICE_URL=${N8N_SANDBOX_SERVICE_URL:-http://sandbox-api:8080}
+      # Shared secret – must match SANDBOX_API_KEYS on the sandbox-api container.
+      - N8N_SANDBOX_SERVICE_API_KEY=${N8N_SANDBOX_SERVICE_API_KEY}
+
     volumes:
       # All n8n data (SQLite DB, credentials, workflows, binary files) is
       # stored here. This folder is git-ignored so it never enters version
@@ -119,3 +128,129 @@ services:
       app.kubernetes.io/name: "n8n"
       app.kubernetes.io/component: "workflow-engine"
       app.kubernetes.io/managed-by: "docker-compose"
+
+    # n8n must be on the sandbox-service network to resolve sandbox-api by
+    # hostname. No host port is exposed for sandbox-api.
+    networks:
+      - default
+      - sandbox-service
+
+  # ---------------------------------------------------------------------------
+  # Sandbox stack – required for the AI Assistant to run code
+  # ---------------------------------------------------------------------------
+  # Official images from Docker Hub (n8nio org). Source:
+  # https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/examples/compose.macos.yaml
+  #
+  # tls-init is a one-shot container that generates mTLS certificates on first
+  # run. It exits normally after completing — this is expected, not an error.
+  tls-init:
+    image: n8nio/n8n-sandbox-service-api:latest
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        bootstrap-mtls.sh
+        --out-dir /tls
+        --api-san n8n-sandbox-api-local
+        --control-san-prefix n8n-sandbox-runner
+        && chown -R sandbox-api:sandbox-api /tls/api
+    environment:
+      NUM_RUNNERS: ${NUM_RUNNERS:-1}
+    volumes:
+      - ./.tls:/tls
+    networks:
+      - sandbox-service
+
+  # sandbox-api is the control plane. n8n talks to it on port 8080 (internal
+  # to the sandbox-service network – not exposed on the host).
+  sandbox-api:
+    image: n8nio/n8n-sandbox-service-api:latest
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./.tls/api:/tls:ro
+      - sandbox-api-data:/var/lib/n8n-sandbox-api
+    environment:
+      # Must match N8N_SANDBOX_SERVICE_API_KEY in the n8n service above.
+      SANDBOX_API_KEYS: ${N8N_SANDBOX_SERVICE_API_KEY}
+      SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_API_RUNNER_REGISTRATION_TOKEN}
+      SANDBOX_API_RUNNER_API_KEY: ${SANDBOX_API_RUNNER_API_KEY}
+      SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/grpc-server.crt
+      SANDBOX_API_GRPC_TLS_KEY_FILE: /tls/grpc-server.key
+      SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /tls/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-api-client.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-api-client.key
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      sandbox-service:
+        aliases:
+          - n8n-sandbox-api
+    labels:
+      app.kubernetes.io/name: "sandbox-api"
+      app.kubernetes.io/component: "sandbox"
+      app.kubernetes.io/managed-by: "docker-compose"
+
+  # sandbox-runner is the Docker-in-Docker executor. privileged: true is
+  # required on macOS (sysbox-runc is Linux-only).
+  sandbox-runner:
+    image: n8nio/n8n-sandbox-service-runner-dind:latest
+    restart: unless-stopped
+    privileged: true
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+      sandbox-api:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./.tls/runner:/tls:ro
+    environment:
+      SANDBOX_RUNNER_API_KEYS: ${SANDBOX_RUNNER_API_KEYS}
+      SANDBOX_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_RUNNER_REGISTRATION_TOKEN}
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox-service-sandbox:latest
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api:9090
+      SANDBOX_RUNNER_HTTP_BASE_URL: https://n8n-sandbox-runner-1:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-1:9091
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /tls/ca.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /tls/grpc-client.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /tls/grpc-client.key
+      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: n8n-sandbox-api-local
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-server.crt
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-server.key
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /tls/ca.crt
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--no-check-certificate", "https://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    networks:
+      sandbox-service:
+        aliases:
+          - n8n-sandbox-runner-1
+    labels:
+      app.kubernetes.io/name: "sandbox-runner"
+      app.kubernetes.io/component: "sandbox"
+      app.kubernetes.io/managed-by: "docker-compose"
+
+networks:
+  # sandbox-service is an internal bridge. n8n joins it (see networks: below)
+  # so it can reach sandbox-api without exposing port 8080 on the host.
+  sandbox-service:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Named volumes
+# ---------------------------------------------------------------------------
+volumes:
+  sandbox-api-data:
