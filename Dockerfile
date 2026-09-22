@@ -13,12 +13,11 @@
 FROM node:24-alpine3.21
 
 # ── System packages ───────────────────────────────────────────────────────────
-# Install ffmpeg, Python + pip, wget (used to download yt-dlp binary).
+# Install ffmpeg, Python + pip (yt-dlp and spotdl are installed via pip below).
 RUN apk add --no-cache \
       ffmpeg \
       python3 \
       py3-pip \
-      wget \
       su-exec
 
 # ── n8n ───────────────────────────────────────────────────────────────────────
@@ -26,9 +25,10 @@ ARG N8N_VERSION=2.36.9
 RUN npm install -g n8n@${N8N_VERSION} --omit=dev
 
 # ── yt-dlp ────────────────────────────────────────────────────────────────────
-RUN wget -qO /usr/local/bin/yt-dlp \
-      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
- && chmod +x /usr/local/bin/yt-dlp
+# Install yt-dlp as a Python package with all optional dependencies (brotli,
+# mutagen, pycryptodomex, requests, websockets, …) so nothing is missing at
+# runtime. The -U flag ensures the latest version is always pulled at build time.
+RUN pip install -U --break-system-packages "yt-dlp[default]"
 
 # ── spotdl ────────────────────────────────────────────────────────────────────
 RUN pip3 install --break-system-packages --quiet spotdl
